@@ -31,8 +31,8 @@ def detect_flight_controller_port(default_port: str) -> str:
     try:
         if os.path.exists(default_port):
             return default_port
-        if os.path.exists("/dev/ttyACM0"):
-            return "/dev/ttyACM0"
+        if os.path.exists("/dev/ttyACM1"):
+            return "/dev/ttyACM1"
         if os.path.exists("/dev/fc_cube"):
             return "/dev/fc_cube"
         return default_port
@@ -106,7 +106,7 @@ def send_approved_test_command(connection: mavutil.mavfile, logger: logging.Logg
         logger.error(f"Command exchange failed: {error}")
         return False
 
-def run_bridge(default_port: str = "/dev/ttyACM0", baud: int = 115200) -> None:
+def run_bridge(default_port: str = "/dev/ttyACM1", baud: int = 115200) -> None:
     """Main loop maintaining companion heartbeat, telemetry ingestion, and auto-reconnection."""
     logger: logging.Logger = setup_logger("/var/log/dbvf/comms.log")
     connection: mavutil.mavfile | None = None
@@ -173,7 +173,7 @@ def run_bridge(default_port: str = "/dev/ttyACM0", baud: int = 115200) -> None:
 def main() -> None:
     """Parse runtime arguments and invoke the MAVLink communication bridge."""
     parser: argparse.ArgumentParser = argparse.ArgumentParser(description="CubeOrange MAVLink Telemetry Bridge")
-    parser.add_argument("--port", type=str, default="/dev/ttyACM0")
+    parser.add_argument("--port", type=str, default="/dev/ttyACM1")
     parser.add_argument("--baud", type=int, default=115200)
 
     try:
