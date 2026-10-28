@@ -2,32 +2,31 @@ import argparse
 import logging
 import os
 import time
-from typing import Optional
 from pymavlink import mavutil
 import serial
 
 def setup_logger(log_path: str) -> logging.Logger:
     """Configure file and console logging for the MAVLink bridge."""
-    logger: logging.Logger = logging.getLogger("FCBridge")
+    logger: logging.Logger = logging.getLogger("FlightControllerBridge")
     logger.setLevel(logging.INFO)
     formatter: logging.Formatter = logging.Formatter("%(asctime)s [%(levelname)s] %(message)s")
 
     try:
-        log_dir: str = os.path.dirname(log_path)
-        if log_dir:
-            os.makedirs(log_dir, exist_ok=True)
-        fh: logging.FileHandler = logging.FileHandler(log_path)
-        fh.setFormatter(formatter)
-        logger.addHandler(fh)
-    except OSError as err:
-        print(f"File logging error: {err}")
+        log_directory: str = os.path.dirname(log_path)
+        if log_directory:
+            os.makedirs(log_directory, exist_ok=True)
+        file_handler: logging.FileHandler = logging.FileHandler(log_path)
+        file_handler.setFormatter(formatter)
+        logger.addHandler(file_handler)
+    except OSError as error:
+        print(f"File logging error: {error}")
 
-    ch: logging.StreamHandler = logging.StreamHandler()
-    ch.setFormatter(formatter)
-    logger.addHandler(ch)
+    console_handler: logging.StreamHandler = logging.StreamHandler()
+    console_handler.setFormatter(formatter)
+    logger.addHandler(console_handler)
     return logger
 
-def detect_fc_port(default_port: str) -> str:
+def detect_flight_controller_port(default_port: str) -> str:
     """Select the active serial port, checking explicit device nodes first."""
     try:
         if os.path.exists(default_port):
@@ -40,29 +39,29 @@ def detect_fc_port(default_port: str) -> str:
     except OSError:
         return default_port
 
-def connect_fc(port: str, baud: int, logger: logging.Logger) -> Optional[mavutil.mavfile]:
+def connect_flight_controller(port: str, baud: int, logger: logging.Logger) -> mavutil.mavfile | None:
     """Establish a MAVLink serial connection and wait for the flight controller heartbeat."""
-    conn: Optional[mavutil.mavfile] = None
+    connection: mavutil.mavfile | None = None
     try:
-        conn = mavutil.mavlink_connection(port, baud=baud, source_system=1, source_component=191)
+        connection = mavutil.mavlink_connection(port, baud=baud, source_system=1, source_component=191)
         logger.info(f"Waiting for heartbeat on {port} at {baud} baud...")
-        hb = conn.wait_heartbeat(timeout=10)
-        if hb is None:
+        heartbeat = connection.wait_heartbeat(timeout=10)
+        if heartbeat is None:
             logger.warning(f"Timed out waiting for heartbeat on {port}.")
-            conn.close()
+            connection.close()
             return None
-        logger.info(f"Heartbeat received from system {conn.target_system}, component {conn.target_component}")
-        return conn
-    except Exception as err:
-        logger.error(f"Failed to connect to FC on {port}: {err}")
-        if conn is not None:
+        logger.info(f"Heartbeat received from system {connection.target_system}, component {connection.target_component}")
+        return connection
+    except Exception as error:
+        logger.error(f"Failed to connect to flight controller on {port}: {error}")
+        if connection is not None:
             try:
-                conn.close()
+                connection.close()
             except Exception:
                 pass
         return None
 
-def request_telemetry_streams(conn: mavutil.mavfile, logger: logging.Logger) -> bool:
+def request_telemetry_streams(connection: mavutil.mavfile, logger: logging.Logger) -> bool:
     """Request standard telemetry message intervals from the flight controller."""
     try:
         messages: list[tuple[int, int]] = [
@@ -70,118 +69,118 @@ def request_telemetry_streams(conn: mavutil.mavfile, logger: logging.Logger) -> 
             (mavutil.mavlink.MAVLINK_MSG_ID_GLOBAL_POSITION_INT, 100000),
             (mavutil.mavlink.MAVLINK_MSG_ID_ATTITUDE, 100000),
         ]
-        for msg_id, interval_us in messages:
-            conn.mav.command_long_send(
-                conn.target_system,
-                conn.target_component,
+        for message_id, interval_microseconds in messages:
+            connection.mav.command_long_send(
+                connection.target_system,
+                connection.target_component,
                 mavutil.mavlink.MAV_CMD_SET_MESSAGE_INTERVAL,
                 0,
-                float(msg_id),
-                float(interval_us),
+                float(message_id),
+                float(interval_microseconds),
                 0.0, 0.0, 0.0, 0.0, 0.0
             )
-        logger.info("Requested telemetry streams from FC.")
+        logger.info("Requested telemetry streams from flight controller.")
         return True
-    except Exception as err:
-        logger.error(f"Error requesting streams: {err}")
+    except Exception as error:
+        logger.error(f"Error requesting streams: {error}")
         return False
 
-def send_approved_test_command(conn: mavutil.mavfile, logger: logging.Logger) -> bool:
+def send_approved_test_command(connection: mavutil.mavfile, logger: logging.Logger) -> bool:
     """Send a safe, non-actuating command and verify the acknowledgment."""
     try:
-        conn.mav.command_long_send(
-            conn.target_system,
-            conn.target_component,
+        connection.mav.command_long_send(
+            connection.target_system,
+            connection.target_component,
             mavutil.mavlink.MAV_CMD_REQUEST_MESSAGE,
             0,
             float(mavutil.mavlink.MAVLINK_MSG_ID_AUTOPILOT_VERSION),
             0.0, 0.0, 0.0, 0.0, 0.0, 0.0
         )
-        ack = conn.recv_match(type="COMMAND_ACK", blocking=True, timeout=3.0)
-        if ack and ack.command == mavutil.mavlink.MAV_CMD_REQUEST_MESSAGE:
-            logger.info(f"Approved command verified. ACK result code: {ack.result}")
+        acknowledgement = connection.recv_match(type="COMMAND_ACK", blocking=True, timeout=3.0)
+        if acknowledgement and acknowledgement.command == mavutil.mavlink.MAV_CMD_REQUEST_MESSAGE:
+            logger.info(f"Approved command verified. Acknowledgement result code: {acknowledgement.result}")
             return True
         logger.warning("No COMMAND_ACK received within timeout.")
         return False
-    except Exception as err:
-        logger.error(f"Command exchange failed: {err}")
+    except Exception as error:
+        logger.error(f"Command exchange failed: {error}")
         return False
 
 def run_bridge(default_port: str = "/dev/ttyACM0", baud: int = 115200) -> None:
     """Main loop maintaining companion heartbeat, telemetry ingestion, and auto-reconnection."""
     logger: logging.Logger = setup_logger("/var/log/dbvf/comms.log")
-    conn: Optional[mavutil.mavfile] = None
-    last_hb_sent: float = 0.0
+    connection: mavutil.mavfile | None = None
+    last_heartbeat_sent: float = 0.0
 
     while True:
         try:
-            if conn is None:
-                active_port: str = detect_fc_port(default_port)
-                conn = connect_fc(active_port, baud, logger)
-                if conn is None:
+            if connection is None:
+                active_port: str = detect_flight_controller_port(default_port)
+                connection = connect_flight_controller(active_port, baud, logger)
+                if connection is None:
                     time.sleep(2.0)
                     continue
-                request_telemetry_streams(conn, logger)
-                send_approved_test_command(conn, logger)
+                request_telemetry_streams(connection, logger)
+                send_approved_test_command(connection, logger)
 
-            now: float = time.time()
-            if now - last_hb_sent >= 1.0:
-                conn.mav.heartbeat_send(
+            current_time: float = time.time()
+            if current_time - last_heartbeat_sent >= 1.0:
+                connection.mav.heartbeat_send(
                     mavutil.mavlink.MAV_TYPE_ONBOARD_CONTROLLER,
                     mavutil.mavlink.MAV_AUTOPILOT_INVALID,
                     0, 0, 0
                 )
-                last_hb_sent = now
+                last_heartbeat_sent = current_time
 
-            msg = conn.recv_match(blocking=True, timeout=1.0)
-            if msg is None:
+            message = connection.recv_match(blocking=True, timeout=1.0)
+            if message is None:
                 continue
 
-            msg_type: str = msg.get_type()
-            if msg_type == "BAD_DATA":
+            message_type: str = message.get_type()
+            if message_type == "BAD_DATA":
                 continue
-            elif msg_type == "HEARTBEAT":
-                armed: bool = bool(msg.base_mode & mavutil.mavlink.MAV_MODE_FLAG_SAFETY_ARMED)
-                logger.info(f"FC Status -> Armed: {armed} | Custom Mode: {msg.custom_mode}")
-            elif msg_type == "GLOBAL_POSITION_INT":
-                rel_alt_ft: float = (msg.relative_alt / 1000.0) * 3.28084
-                logger.info(f"Position -> Lat: {msg.lat / 1e7:.6f}, Lon: {msg.lon / 1e7:.6f}, Alt AGL: {rel_alt_ft:.2f} ft")
-            elif msg_type == "SYS_STATUS":
-                vbat: float = msg.voltage_battery / 1000.0
-                logger.info(f"Battery -> Voltage: {vbat:.2f} V, Remaining: {msg.battery_remaining}%")
+            elif message_type == "HEARTBEAT":
+                armed: bool = bool(message.base_mode & mavutil.mavlink.MAV_MODE_FLAG_SAFETY_ARMED)
+                logger.info(f"Flight Controller Status -> Armed: {armed} | Custom Mode: {message.custom_mode}")
+            elif message_type == "GLOBAL_POSITION_INT":
+                relative_altitude_feet: float = (message.relative_alt / 1000.0) * 3.28084
+                logger.info(f"Position -> Lat: {message.lat / 1e7:.6f}, Lon: {message.lon / 1e7:.6f}, Alt AGL: {relative_altitude_feet:.2f} ft")
+            elif message_type == "SYS_STATUS":
+                voltage_battery: float = message.voltage_battery / 1000.0
+                logger.info(f"Battery -> Voltage: {voltage_battery:.2f} V, Remaining: {message.battery_remaining}%")
 
-        except (OSError, serial.SerialException) as err:
-            logger.error(f"Serial link lost ({err}). Attempting recovery...")
-            if conn is not None:
+        except (OSError, serial.SerialException) as error:
+            logger.error(f"Serial link lost ({error}). Attempting recovery...")
+            if connection is not None:
                 try:
-                    conn.close()
+                    connection.close()
                 except Exception:
                     pass
-            conn = None
+            connection = None
             time.sleep(2.0)
         except KeyboardInterrupt:
-            logger.info("Shutting down FC bridge.")
-            if conn is not None:
+            logger.info("Shutting down flight controller bridge.")
+            if connection is not None:
                 try:
-                    conn.close()
+                    connection.close()
                 except Exception:
                     pass
             break
-        except Exception as err:
-            logger.error(f"Unexpected loop error: {err}")
+        except Exception as error:
+            logger.error(f"Unexpected loop error: {error}")
             time.sleep(1.0)
 
 def main() -> None:
     """Parse runtime arguments and invoke the MAVLink communication bridge."""
-    parser = argparse.ArgumentParser(description="CubeOrange MAVLink Telemetry Bridge")
+    parser: argparse.ArgumentParser = argparse.ArgumentParser(description="CubeOrange MAVLink Telemetry Bridge")
     parser.add_argument("--port", type=str, default="/dev/ttyACM0")
     parser.add_argument("--baud", type=int, default=115200)
-    args = parser.parse_args()
 
     try:
-        run_bridge(default_port=args.port, baud=args.baud)
-    except Exception as err:
-        print(f"Bridge execution failed: {err}")
+        arguments: argparse.Namespace = parser.parse_args()
+        run_bridge(default_port=arguments.port, baud=arguments.baud)
+    except Exception as error:
+        print(f"Bridge execution failed: {error}")
 
 if __name__ == "__main__":
     main()
